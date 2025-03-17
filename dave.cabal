@@ -22,7 +22,9 @@ library
     exposed-modules:  MyLib
     -- other-modules:
     -- other-extensions:
-    build-depends:    base ^>=4.14.0.0
+    build-depends:
+        base ^>=4.14.0.0,
+        inline-c-cpp ^>=0.5.0.2
     hs-source-dirs:   src
     default-language: Haskell2010
 
@@ -36,4 +38,5 @@ test-suite dave-test
     main-is:          Main.hs
     build-depends:
         base ^>=4.14.0.0,
+        inline-c-cpp ^>=0.5.0.2,
         dave
