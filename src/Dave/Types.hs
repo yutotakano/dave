@@ -12,9 +12,9 @@ import Language.C.Inline qualified as C
 import Language.C.Types qualified as CT
 import Language.C.Inline.Cpp qualified as Cpp
 
--- | Opaque type for a C++ object of mls::Session.
+-- | Opaque type for a C++ object of discord::dave::mls::Session.
 data RawDaveMLSSession
--- | Type alias for a pointer to RawDaveMLSSession to simplify API. Construct
+-- | Type alias for a pointer to 'RawDaveMLSSession' to simplify API. Construct
 -- this using 'Dave.Raw.MLS.Session.new', then call 'Dave.Raw.MLS.Session.init'
 -- on it to initialise it.
 type MLSSession = Ptr RawDaveMLSSession
@@ -34,6 +34,20 @@ newtype DaveProtocolVersion = DaveProtocolVersion Word16
 -- implementation detail, we've hid it behind the newtype wrapper in the API.
 newtype DaveSignatureVersion = DaveSignatureVersion Word8
     deriving (Show, Read, Eq) via Word8
+
+
+-- | Type alias for a void pointer (void *), which is how we hold the pointer to
+-- std::shared_ptr<::mlspp::SignaturePrivateKey> on the C++ heap.
+--
+-- Libdave always gives and takes this value as a shared_ptr, which is why we
+-- can hold it opaquely (with just a void pointer to it), without having to go
+-- through the pain of marshalling the shared_ptr itself to the Haskell side.
+--
+-- As the library authors, we do need to make sure to cast to and from the
+-- appropriate C++ pointer (std::shared_ptr<..> *) type when returning from or
+-- using in inline C++.
+type SignaturePrivateKey = Ptr ()
+
 
 -- | Set up matching types between C++ return types and Haskell types
 daveContext :: C.Context
