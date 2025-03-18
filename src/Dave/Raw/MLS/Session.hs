@@ -1,5 +1,6 @@
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE QuasiQuotes #-}
+{-# LANGUAGE ImportQualifiedPost #-}
 module Dave.Raw.MLS.Session where
 
 import Control.Monad.IO.Class ( MonadIO, liftIO )
