@@ -12,20 +12,96 @@ maintainer:         moa17stock@gmail.com
 category:           Network
 build-type:         Simple
 extra-doc-files:    CHANGELOG.md
--- extra-source-files:
+extra-source-files:
+    -- Things to bundle in the tarball, this is for reproducible builds on
+    -- Hackage and for distribution. It should contain all files we use.
+    libdave/cpp/src/dave/mls/*.h
+    libdave/cpp/src/dave/*.h
 
 common warnings
     ghc-options: -Wall
 
 library
     import:           warnings
-    exposed-modules:  MyLib
-    -- other-modules:
-    -- other-extensions:
+    exposed-modules:
+        MyLib
+        Dave.Raw.MLS.Session
+    default-extensions:
+        ImportQualifiedPost
     build-depends:
         base ^>=4.14.0.0,
+        inline-c ^>=0.9.0.0,
         inline-c-cpp ^>=0.5.0.2
     hs-source-dirs:   src
+    include-dirs:
+        -- These are where the GHC compiler (and its c++ compiler that it calls)
+        -- finds includes. This also defines where inline-c-cpp includes look.
+        --
+        -- libdave header files
+        libdave/cpp/src
+        -- custom header files for this project (used only for declaring the
+        -- MLSpp namespace the way libdave wants it)
+        cbits
+        -- MLSpp header files
+        mlspp/include
+        -- MLSpp extra library header files (the ones required for libdave)
+        mlspp/lib/bytes/include
+        mlspp/lib/hpke/include
+        mlspp/lib/tls_syntax/include
+    -- Require OpenSSL (Discord says BoringSSL but that should be the same, hopefully)
+    pkgconfig-depends: libssl
+    -- Require linking with the stdlib library (requires additional ghc-options)
+    extra-libraries:  stdc++
+    ghc-options:
+        -- Need to set std=c++17 here to make GHC compile C++ using C++17
+        -optcxx-std=c++17
+        -- Link with C++ std library statically using magical invocation
+        -- Thank you https://gitlab.haskell.org/ghc/ghc/-/issues/20010
+        -optl-Wl,-Bstatic,-lstdc++,-Bdynamic
+    cxx-sources:
+        -- These are compiled and linked together with the Haskell code.
+        --
+        -- All sources for MLSpp core are listed
+        mlspp/src/common.cpp
+        mlspp/src/core_types.cpp
+        mlspp/src/credential.cpp
+        mlspp/src/crypto.cpp
+        mlspp/src/grease.cpp
+        mlspp/src/key_schedule.cpp
+        mlspp/src/messages.cpp
+        mlspp/src/session.cpp
+        mlspp/src/state.cpp
+        mlspp/src/tree_math.cpp
+        mlspp/src/treekem.cpp
+        -- Sources for MLSpp extra libraries
+        mlspp/lib/bytes/src/bytes.cpp
+        mlspp/lib/tls_syntax/src/tls_syntax.cpp
+        mlspp/lib/hpke/src/digest.cpp
+        mlspp/lib/hpke/src/random.cpp
+        mlspp/lib/hpke/src/openssl_common.cpp
+        mlspp/lib/hpke/src/hpke.cpp
+        mlspp/lib/hpke/src/dhkem.cpp
+        mlspp/lib/hpke/src/common.cpp
+        mlspp/lib/hpke/src/group.cpp
+        mlspp/lib/hpke/src/hkdf.cpp
+        mlspp/lib/hpke/src/aead_cipher.cpp
+        mlspp/lib/hpke/src/signature.cpp
+        mlspp/lib/hpke/src/rsa.cpp
+        mlspp/lib/hpke/src/base64.cpp
+        mlspp/lib/hpke/src/userinfo_vc.cpp
+        mlspp/lib/hpke/src/certificate.cpp
+        -- Only the sources for libdave that are required for functionality
+        libdave/cpp/src/dave/mls/parameters.cpp
+        libdave/cpp/src/dave/mls/persisted_key_pair.cpp
+        -- Use the null platform stub for keypair persistence and fall back to
+        -- the generic one.
+        libdave/cpp/src/dave/mls/detail/persisted_key_pair_null.cpp
+        libdave/cpp/src/dave/mls/detail/persisted_key_pair_generic.cpp
+        libdave/cpp/src/dave/mls/session.cpp
+        libdave/cpp/src/dave/mls/user_credential.cpp
+        libdave/cpp/src/dave/mls/util.cpp
+        libdave/cpp/src/dave/mls_key_ratchet.cpp
+        libdave/cpp/src/dave/logger.cpp
     default-language: Haskell2010
 
 test-suite dave-test
@@ -38,5 +114,6 @@ test-suite dave-test
     main-is:          Main.hs
     build-depends:
         base ^>=4.14.0.0,
+        inline-c ^>=0.9.0.0,
         inline-c-cpp ^>=0.5.0.2,
         dave
