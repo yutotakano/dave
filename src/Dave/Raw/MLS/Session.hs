@@ -45,3 +45,13 @@ init session (DaveProtocolVersion protocolVersion) groupId selfUserId transientK
             $(mls::Session* session)->Init($(uint16_t protocolVersion), $(uint64_t groupId), uid, *(std::shared_ptr<::mlspp::SignaturePrivateKey> *)$(void* transientKey));
         }
     |]
+
+-- | Reset the Dave MLS session entirely. You must call 'init' to use this
+-- session again.
+reset :: MonadIO m => MLSSession -> m ()
+reset session = liftIO $ do
+    [C.block|
+        void {
+            $(mls::Session* session)->Reset();
+        }
+    |]
