@@ -27,6 +27,7 @@ library
         MyLib
         Dave.Types
         Dave.Raw.MLS.Session
+        Dave.Raw.Version
     build-depends:
         base ^>=4.14.0.0,
         inline-c ^>=0.9.0.0,
@@ -101,6 +102,7 @@ library
         libdave/cpp/src/dave/mls/util.cpp
         libdave/cpp/src/dave/mls_key_ratchet.cpp
         libdave/cpp/src/dave/logger.cpp
+        libdave/cpp/src/dave/version.cpp
     default-language: Haskell2010
 
 test-suite dave-test
