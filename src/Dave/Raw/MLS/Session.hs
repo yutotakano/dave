@@ -4,7 +4,9 @@
 module Dave.Raw.MLS.Session where
 
 import Control.Monad.IO.Class ( MonadIO, liftIO )
+import Data.ByteString qualified as BS
 import Data.Word ( Word64 )
+import Foreign.Marshal.Alloc ( alloca )
 import Language.C.Inline qualified as C
 import Language.C.Inline.Cpp qualified as Cpp
 
@@ -55,3 +57,48 @@ reset session = liftIO $ do
             $(mls::Session* session)->Reset();
         }
     |]
+
+-- | Change the protocol version of a session after initialization.
+setProtocolVersion :: MonadIO m => MLSSession -> DaveProtocolVersion -> m ()
+setProtocolVersion session (DaveProtocolVersion protocolVersion) = liftIO $ do
+    [C.block|
+        void {
+            $(mls::Session* session)->SetProtocolVersion($(uint16_t protocolVersion));
+        }
+    |]
+
+-- GetLastEpochAuthenticator
+-- SetExternalSender
+-- ProcessProposals
+-- IsRecognizedUserID
+-- ValidateProposalMessage
+-- CanProcessCommit
+-- ProcessCommit
+-- ProcessWelcome
+-- ReplaceState
+-- HasCryptographicStateForWelcome
+-- VerifyWelcomeState
+-- InitLeafNode
+-- ResetJoinKeyPackage
+-- CreatePendingGroup
+-- GetMarshalledKeyPackage
+
+-- | Get the generated key package as a marshalled strict bytestring.
+-- This must be called after 'init'.
+getMarshalledKeyPackage :: MLSSession -> IO BS.ByteString
+getMarshalledKeyPackage session = do
+    alloca $ \p -> do
+        n <- [C.block|
+            uint16_t {
+                std::vector<uint8_t> key = $(mls::Session* session)->GetMarshalledKeyPackage();
+                $(char* p) = (char *)(key.data());
+                return key.size();
+            }
+        |]
+        BS.packCStringLen (p, fromIntegral n)
+
+
+
+-- GetKeyRatchet
+-- GetPairwiseFingerprint
+-- ClearPendingState
