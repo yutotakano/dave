@@ -25,8 +25,7 @@ library
     import:           warnings
     exposed-modules:
         MyLib
-        Dave.Raw.Types
-        Dave.Raw.Context
+        Dave.Types
         Dave.Raw.MLS.Session
     build-depends:
         base ^>=4.14.0.0,
