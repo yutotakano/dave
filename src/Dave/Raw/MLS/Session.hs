@@ -50,6 +50,7 @@ init session (DaveProtocolVersion protocolVersion) groupId selfUserId transientK
 
 -- | Reset the Dave MLS session entirely. You must call 'init' to use this
 -- session again.
+-- TODO: untested
 reset :: MonadIO m => MLSSession -> m ()
 reset session = liftIO $ do
     [C.block|
@@ -59,6 +60,7 @@ reset session = liftIO $ do
     |]
 
 -- | Change the protocol version of a session after initialization.
+-- TODO: untested
 setProtocolVersion :: MonadIO m => MLSSession -> DaveProtocolVersion -> m ()
 setProtocolVersion session (DaveProtocolVersion protocolVersion) = liftIO $ do
     [C.block|
@@ -85,6 +87,7 @@ setProtocolVersion session (DaveProtocolVersion protocolVersion) = liftIO $ do
 
 -- | Get the generated key package as a marshalled strict bytestring.
 -- This must be called after 'init'.
+-- TODO: untested
 getMarshalledKeyPackage :: MLSSession -> IO BS.ByteString
 getMarshalledKeyPackage session = do
     alloca $ \p -> do
