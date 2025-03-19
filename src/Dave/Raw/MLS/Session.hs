@@ -88,8 +88,8 @@ setProtocolVersion session (DaveProtocolVersion protocolVersion) = liftIO $ do
 -- | Get the generated key package as a marshalled strict bytestring.
 -- This must be called after 'init'.
 -- TODO: untested
-getMarshalledKeyPackage :: MLSSession -> IO BS.ByteString
-getMarshalledKeyPackage session = do
+getMarshalledKeyPackage :: MonadIO m => MLSSession -> m BS.ByteString
+getMarshalledKeyPackage session = liftIO $ do
     alloca $ \p -> do
         n <- [C.block|
             uint16_t {
