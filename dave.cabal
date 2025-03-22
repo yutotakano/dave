@@ -40,6 +40,8 @@ library
         --
         -- libdave header files
         libdave/cpp/src
+        -- nlohmann/json
+        json/single_include
         -- custom header files for this project (used only for declaring the
         -- MLSpp namespace the way libdave wants it)
         cbits

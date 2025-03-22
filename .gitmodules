@@ -4,3 +4,7 @@
 [submodule "mlspp"]
 	path = mlspp
 	url = https://github.com/cisco/mlspp
+[submodule "json"]
+	path = json
+	url = https://github.com/nlohmann/json
+	shallow = true
