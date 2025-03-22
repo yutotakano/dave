@@ -157,18 +157,8 @@ processProposals session proposals recognizedUserIDs = liftIO $ do
                     else
                         Just <$> BS.packCStringLen (out_p, fromIntegral n)
 
--- IsRecognizedUserID
--- ValidateProposalMessage
--- CanProcessCommit
 -- ProcessCommit
 -- ProcessWelcome
--- ReplaceState
--- HasCryptographicStateForWelcome
--- VerifyWelcomeState
--- InitLeafNode
--- ResetJoinKeyPackage
--- CreatePendingGroup
--- GetMarshalledKeyPackage
 
 -- | Get the generated key package as a marshalled strict bytestring.
 -- This must be called after 'init'.
@@ -189,4 +179,3 @@ getMarshalledKeyPackage session = liftIO $ do
 
 -- GetKeyRatchet
 -- GetPairwiseFingerprint
--- ClearPendingState
