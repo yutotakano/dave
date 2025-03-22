@@ -7,6 +7,10 @@ import Control.Monad.IO.Class ( MonadIO, liftIO )
 import Data.ByteString qualified as BS
 import Data.Word ( Word64 )
 import Foreign.Marshal.Alloc ( alloca )
+import Foreign.Marshal.Array ( withArrayLen )
+import Foreign.Marshal.Utils ( withMany )
+import Foreign.Ptr ( nullPtr )
+import Foreign.Storable ( peek )
 import Language.C.Inline qualified as C
 import Language.C.Inline.Cpp qualified as Cpp
 
@@ -69,9 +73,90 @@ setProtocolVersion session (DaveProtocolVersion protocolVersion) = liftIO $ do
         }
     |]
 
--- GetLastEpochAuthenticator
--- SetExternalSender
--- ProcessProposals
+-- | Get the epoch authenticator.
+-- TODO: untested
+getLastEpochAuthenticator :: MonadIO m => MLSSession -> m BS.ByteString
+getLastEpochAuthenticator session = liftIO $ do
+    alloca $ \p -> do
+        n <- [C.block|
+            uint16_t {
+                std::vector<uint8_t> key = $(mls::Session* session)->GetLastEpochAuthenticator();
+                *$(char** p) = (char *)(key.data());
+                return key.size();
+            }
+        |]
+        peek p >>= \ptr -> BS.packCStringLen (ptr, fromIntegral n)
+
+-- | Set external sender using a marshalled representation of the sender.
+-- TODO: untested
+setExternalSender :: MonadIO m => MLSSession -> BS.ByteString -> m ()
+setExternalSender session marshalledExternalSender = liftIO $ do
+    BS.useAsCStringLen marshalledExternalSender $ \(p, n) -> do
+        let n_size_t = fromIntegral n
+        [C.block|
+            void {
+                // SetExternalVector wants a vector<unsigned char>, so first
+                // cast the pointer, then copy it into a temporary vector
+                uint8_t* ptr = (uint8_t*)$(char* p);
+                const std::vector<uint8_t> vec(ptr, ptr + $(size_t n_size_t));
+                $(mls::Session* session)->SetExternalSender(vec);
+            }
+        |]
+
+-- | Process proposals with a list of recognized user IDs. Returns the commit
+-- and welcome messages in one buffer.
+-- TODO: untested
+processProposals :: MonadIO m => MLSSession -> BS.ByteString -> [BS.ByteString] -> m (Maybe BS.ByteString)
+processProposals session proposals recognizedUserIDs = liftIO $ do
+    -- Get proposals bytestring as a c string with length
+    BS.useAsCStringLen proposals $ \(proposals_ptr, proposals_n) -> do
+        -- Wrap length (Int) with fromIntegral so we can pass it as size_t
+        let proposals_n_size_t = fromIntegral proposals_n
+        -- Nest useAsCString for all user ID bytestrings
+        withMany BS.useAsCString recognizedUserIDs $ \cstrs -> do
+            -- Create a pointer for the list of user ID c strings
+            withArrayLen cstrs $ \str_n str_ptr -> do
+                -- Wrap length (Int) with fromIntegral so it is size_t
+                let str_n_32 = fromIntegral str_n
+                -- Allocate an out pointer
+                alloca $ \out_p_p -> do
+                    n <- [C.block|
+                        uint16_t {
+                            // Convert bytestring passed as C pointer + length
+                            // into a std::vector<uint8_t>
+                            uint8_t* ptr = (uint8_t*)$(char* proposals_ptr);
+                            const std::vector<uint8_t> proposals(ptr, ptr + $(size_t proposals_n_size_t));
+
+                            // Convert array of strings (null-terminated C strs)
+                            // and the array length into a std::set<std::string>
+                            std::set<std::string> user_ids;
+                            char** cstrs = $(char** str_ptr);
+                            for (size_t i = 0; i < $(int32_t str_n_32); i++)
+                            {
+                                user_ids.insert(std::string(cstrs[i]));
+                            }
+
+                            // Call ProcessProposals, which returns the combined
+                            // commit and welcome message bytestream
+                            std::optional<std::vector<uint8_t>> commit_welcome = $(mls::Session* session)->ProcessProposals(proposals, user_ids);
+
+                            char** out_p_p = $(char** out_p_p);
+                            if (commit_welcome.has_value())
+                            {
+                                *out_p_p = (char *)commit_welcome.value().data();
+                                return commit_welcome.value().size();
+                            }
+
+                            *out_p_p = nullptr;
+                            return 0;
+                        }
+                    |]
+                    out_p <- peek out_p_p
+                    if out_p == nullPtr then
+                        pure Nothing
+                    else
+                        Just <$> BS.packCStringLen (out_p, fromIntegral n)
+
 -- IsRecognizedUserID
 -- ValidateProposalMessage
 -- CanProcessCommit
@@ -94,11 +179,11 @@ getMarshalledKeyPackage session = liftIO $ do
         n <- [C.block|
             uint16_t {
                 std::vector<uint8_t> key = $(mls::Session* session)->GetMarshalledKeyPackage();
-                $(char* p) = (char *)(key.data());
+                *$(char** p) = (char *)(key.data());
                 return key.size();
             }
         |]
-        BS.packCStringLen (p, fromIntegral n)
+        peek p >>= \ptr -> BS.packCStringLen (ptr, fromIntegral n)
 
 
 
