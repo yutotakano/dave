@@ -81,11 +81,19 @@ getLastEpochAuthenticator session = liftIO $ do
         n <- [C.block|
             uint16_t {
                 std::vector<uint8_t> key = $(mls::Session* session)->GetLastEpochAuthenticator();
-                *$(char** p) = (char *)(key.data());
+
+                // Copy the vector to a C array on heap so the data stays valid
+                // even after we return to Haskell. It has to be freed manually
+                // afterwards!!
+                char** out_p = $(char** p);
+                *out_p = (char*)malloc(key.size());
+                memcpy(*out_p, key.data(), key.size());
                 return key.size();
             }
         |]
-        peek p >>= \ptr -> BS.packCStringLen (ptr, fromIntegral n)
+        bs <- peek p >>= \ptr -> BS.packCStringLen (ptr, fromIntegral n)
+        [C.block| void { free(*$(char** p)); } |]
+        pure bs
 
 -- | Set external sender using a marshalled representation of the sender.
 -- TODO: untested
