@@ -180,11 +180,7 @@ getMarshalledKeyPackage session = liftIO $ do
             }
         |]
         bs <- peek p >>= \ptr -> BS.packCStringLen (ptr, fromIntegral n)
-        [C.block|
-            void {
-                free(*$(char** p));
-            }
-        |]
+        [C.block| void { free(*$(char** p)); } |]
         pure bs
 
 
