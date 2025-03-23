@@ -8,11 +8,10 @@ import Control.Monad.IO.Class ( MonadIO, liftIO )
 import Data.ByteString qualified as BS
 import Data.Map.Strict qualified as Map
 import Data.Word ( Word64 )
-import Foreign.Marshal.Alloc ( alloca )
 import Foreign.Marshal.Array ( withArrayLen )
 import Foreign.Marshal.Utils ( withMany )
 import Foreign.Ptr ( nullPtr )
-import Foreign.Storable ( peek, peekElemOff )
+import Foreign.Storable ( peekElemOff )
 import Language.C.Inline qualified as C
 import Language.C.Inline.Cpp qualified as Cpp
 
@@ -79,8 +78,8 @@ setProtocolVersion session (DaveProtocolVersion protocolVersion) = liftIO $ do
 -- TODO: untested
 getLastEpochAuthenticator :: MonadIO m => MLSSession -> m BS.ByteString
 getLastEpochAuthenticator session = liftIO $ do
-    alloca $ \p -> do
-        n <- [C.block|
+    (ptr, n) <- C.withPtr $ \p ->
+        [C.block|
             uint16_t {
                 std::vector<uint8_t> key = $(mls::Session* session)->GetLastEpochAuthenticator();
 
@@ -93,9 +92,9 @@ getLastEpochAuthenticator session = liftIO $ do
                 return key.size();
             }
         |]
-        bs <- peek p >>= \ptr -> BS.packCStringLen (ptr, fromIntegral n)
-        [C.block| void { free(*$(char** p)); } |]
-        pure bs
+    bs <- BS.packCStringLen (ptr, fromIntegral n)
+    [C.block| void { free($(char* ptr)); } |]
+    pure bs
 
 -- | Set external sender using a marshalled representation of the sender.
 -- TODO: untested
@@ -129,8 +128,8 @@ processProposals session proposals recognizedUserIDs = liftIO $ do
                 -- Wrap length (Int) with fromIntegral so it is size_t
                 let str_n_32 = fromIntegral str_n
                 -- Allocate an out pointer
-                alloca $ \p -> do
-                    n <- [C.block|
+                (ptr, n) <- C.withPtr $ \p ->
+                    [C.block|
                         uint16_t {
                             // Convert bytestring passed as C pointer + length
                             // into a std::vector<uint8_t>
@@ -166,16 +165,15 @@ processProposals session proposals recognizedUserIDs = liftIO $ do
                             return 0;
                         }
                     |]
-                    -- Check if the output is a nullptr or a pointer to the
-                    -- C++ heap containing the bytestring
-                    out_p <- peek p
-                    if out_p == nullPtr then
-                        pure Nothing
-                    else do
-                        bs <- BS.packCStringLen (out_p, fromIntegral n)
-                        -- Free!
-                        [C.block| void { free(*$(char** p)); } |]
-                        pure $ Just bs
+                -- Check if the output is a nullptr or a pointer to the
+                -- C++ heap containing the bytestring
+                if ptr == nullPtr then
+                    pure Nothing
+                else do
+                    bs <- BS.packCStringLen (ptr, fromIntegral n)
+                    -- Free!
+                    [C.block| void { free($(char* ptr)); } |]
+                    pure $ Just bs
 
 -- | Process a commit message and return either a hard reject (caller should
 -- reset state), soft reject (caller should ignore the error) or a roster map
@@ -277,8 +275,8 @@ processCommit session commitMessage = liftIO $ do
 -- TODO: untested
 getMarshalledKeyPackage :: MonadIO m => MLSSession -> m BS.ByteString
 getMarshalledKeyPackage session = liftIO $ do
-    alloca $ \p -> do
-        n <- [C.block|
+    (ptr, n) <- C.withPtr $ \p ->
+        [C.block|
             uint16_t {
                 std::vector<uint8_t> key = $(mls::Session* session)->GetMarshalledKeyPackage();
 
@@ -291,9 +289,9 @@ getMarshalledKeyPackage session = liftIO $ do
                 return key.size();
             }
         |]
-        bs <- peek p >>= \ptr -> BS.packCStringLen (ptr, fromIntegral n)
-        [C.block| void { free(*$(char** p)); } |]
-        pure bs
+    bs <- BS.packCStringLen (ptr, fromIntegral n)
+    [C.block| void { free($(char* ptr)); } |]
+    pure bs
 
 
 
