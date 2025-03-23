@@ -3,14 +3,16 @@
 {-# LANGUAGE ImportQualifiedPost #-}
 module Dave.Raw.MLS.Session where
 
+import Control.Monad ( forM )
 import Control.Monad.IO.Class ( MonadIO, liftIO )
 import Data.ByteString qualified as BS
+import Data.Map.Strict qualified as Map
 import Data.Word ( Word64 )
 import Foreign.Marshal.Alloc ( alloca )
 import Foreign.Marshal.Array ( withArrayLen )
 import Foreign.Marshal.Utils ( withMany )
 import Foreign.Ptr ( nullPtr )
-import Foreign.Storable ( peek )
+import Foreign.Storable ( peek, peekElemOff )
 import Language.C.Inline qualified as C
 import Language.C.Inline.Cpp qualified as Cpp
 
@@ -175,8 +177,99 @@ processProposals session proposals recognizedUserIDs = liftIO $ do
                         [C.block| void { free(*$(char** p)); } |]
                         pure $ Just bs
 
+-- | Process a commit message and return either a hard reject (caller should
+-- reset state), soft reject (caller should ignore the error) or a roster map
+-- of user IDs to keys. The roster map lists IDs whose keys have been added,
+-- changed, or removed; an empty value value means a key was removed.
+-- TODO: untested
+processCommit :: MonadIO m => MLSSession -> BS.ByteString -> m RosterVariant
+processCommit session commitMessage = liftIO $ do
+    -- Pass four out pointers:
+    -- typ: 0 for RosterMap, 1 for failed_t, 2 for ignored_t
+    -- key_p: Array of uint64_t keys for RosterMap
+    -- val_p: Array of byte string values for RosterMap
+    -- val_len_p: Array of lengths of byte strings in val_p
+    -- n: Number of items in the key_p and val_p array
+    (typ, key_p, val_p, val_len_p, n) <- C.withPtrs_ $ \(out_typ_p, out_key_p, out_value_p, out_value_len_p, out_n) ->
+        BS.useAsCStringLen commitMessage $ \(commit_p, commit_n) -> do
+            let commit_n_size_t = fromIntegral commit_n
+            [C.block|
+                void {
+                    // Convert bytestring passed as C pointer + length
+                    // into a std::vector<uint8_t>
+                    uint8_t* ptr = (uint8_t*)$(char* commit_p);
+                    const std::vector<uint8_t> commit(ptr, ptr + $(size_t commit_n_size_t));
 
--- ProcessCommit
+                    RosterVariant v = $(mls::Session* session)->ProcessCommit(commit);
+
+                    // RosterVariant is a std::variant of RosterMap, failed_t
+                    // or ignored_t
+                    uint8_t* out_typ_p = $(uint8_t* out_typ_p);
+                    if (std::holds_alternative<failed_t>(v))
+                    {
+                        *out_typ_p = 1;
+                        return;
+                    }
+                    else if (std::holds_alternative<ignored_t>(v))
+                    {
+                        *out_typ_p = 2;
+                        return;
+                    }
+
+                    *out_typ_p = 0;
+                    RosterMap m = std::get<RosterMap>(v);
+
+                    // Set output size
+                    *$(uint8_t* out_n) = m.size();
+
+                    // Create C-style arrays on the heap for keys and values.
+                    // (values are pointers to bytes)
+                    // These need to be freed explicitly afterwards!
+                    uint64_t** keys_p = $(uint64_t** out_key_p);
+                    *keys_p = (uint64_t*)malloc(sizeof(uint64_t) * m.size());
+                    char*** values_p = $(char*** out_value_p);
+                    *values_p = (char**)malloc(sizeof(char*) * m.size());
+                    uint8_t** value_lens_p = $(uint8_t** out_value_len_p);
+                    *value_lens_p = (uint8_t*)malloc(sizeof(uint8_t*) * m.size());
+
+                    // Insert into above array from the kv map
+                    int i = 0;
+                    for (const auto &[key, value] : m)
+                    {
+                        (*keys_p)[i] = key;
+                        (*value_lens_p)[i] = value.size();
+                        (*values_p)[i] = (char*)malloc(value.size());
+                        memcpy((*values_p)[i], value.data(), value.size());
+                    }
+                }
+            |]
+    case typ of
+        1 -> pure HardReject
+        2 -> pure SoftReject
+        _ -> do
+            -- Create a list of (key,value) pairs
+            pairs <- forM [0..(fromIntegral n - 1)] $ \i -> do
+                key <- peekElemOff key_p i
+                val <- peekElemOff val_p i
+                val_len <- peekElemOff val_len_p i
+                bs <- BS.packCStringLen (val, fromIntegral val_len)
+                pure (key, bs)
+
+            -- Make sure we free all dynamically allocated arrays
+            [C.block|
+                void {
+                    free($(uint64_t* key_p));
+                    char** val_p = $(char** val_p);
+                    for (int i = 0; i < $(uint8_t n); i++)
+                    {
+                        free(val_p[i]);
+                    }
+                    free(val_p);
+                    free($(uint8_t* val_len_p));
+                }
+            |]
+            pure $ RosterMap $ Map.fromList pairs
+
 -- ProcessWelcome
 
 -- | Get the generated key package as a marshalled strict bytestring.

@@ -32,7 +32,8 @@ library
         base ^>=4.14.0.0,
         bytestring ^>= 0.10.0.0,
         inline-c ^>=0.9.0.0,
-        inline-c-cpp ^>=0.5.0.2
+        inline-c-cpp ^>=0.5.0.2,
+        containers >= 0.6.5.1 && <0.8
     hs-source-dirs:   src
     include-dirs:
         -- These are where the GHC compiler (and its c++ compiler that it calls)

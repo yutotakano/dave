@@ -6,7 +6,9 @@
 module Dave.Types where
 
 import Foreign.Ptr ( Ptr )
-import Data.Word ( Word8, Word16 )
+import Data.ByteString qualified as BS
+import Data.Map.Strict qualified as Map
+import Data.Word ( Word8, Word16, Word64 )
 
 import Language.C.Inline qualified as C
 import Language.C.Types qualified as CT
@@ -48,6 +50,12 @@ newtype DaveSignatureVersion = DaveSignatureVersion Word8
 -- using in inline C++.
 type SignaturePrivateKey = Ptr ()
 
+
+-- | A type representing either a roster map or soft/hard failures.
+data RosterVariant
+    = RosterMap (Map.Map Word64 BS.ByteString)
+    | SoftReject
+    | HardReject
 
 -- | Set up matching types between C++ return types and Haskell types
 daveContext :: C.Context
