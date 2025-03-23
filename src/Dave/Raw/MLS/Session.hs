@@ -103,8 +103,8 @@ setExternalSender session marshalledExternalSender = liftIO $ do
         let n_size_t = fromIntegral n
         [C.block|
             void {
-                // SetExternalVector wants a vector<unsigned char>, so first
-                // cast the pointer, then copy it into a temporary vector
+                // SetExternalVector wants a vector<uint8_t>, so first cast the
+                // pointer, then copy it into a temporary vector
                 uint8_t* ptr = (uint8_t*)$(char* p);
                 const std::vector<uint8_t> vec(ptr, ptr + $(size_t n_size_t));
                 $(mls::Session* session)->SetExternalSender(vec);
