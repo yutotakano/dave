@@ -86,7 +86,7 @@ getLastEpochAuthenticator session = liftIO $ do
                 // even after we return to Haskell. It has to be freed manually
                 // afterwards!!
                 char** out_p = $(char** p);
-                *out_p = (char*)malloc(key.size());
+                *out_p = static_cast<char *>(malloc(key.size()));
                 memcpy(*out_p, key.data(), key.size());
                 return key.size();
             }
@@ -182,7 +182,7 @@ getMarshalledKeyPackage session = liftIO $ do
                 // even after we return to Haskell. It has to be freed manually
                 // afterwards!!
                 char** out_p = $(char** p);
-                *out_p = (char*)malloc(key.size());
+                *out_p = static_cast<char *>(malloc(key.size()));
                 memcpy(*out_p, key.data(), key.size());
                 return key.size();
             }
