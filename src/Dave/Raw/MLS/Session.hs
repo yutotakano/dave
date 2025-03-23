@@ -127,7 +127,7 @@ processProposals session proposals recognizedUserIDs = liftIO $ do
                 -- Wrap length (Int) with fromIntegral so it is size_t
                 let str_n_32 = fromIntegral str_n
                 -- Allocate an out pointer
-                alloca $ \out_p_p -> do
+                alloca $ \p -> do
                     n <- [C.block|
                         uint16_t {
                             // Convert bytestring passed as C pointer + length
@@ -148,22 +148,33 @@ processProposals session proposals recognizedUserIDs = liftIO $ do
                             // commit and welcome message bytestream
                             std::optional<std::vector<uint8_t>> commit_welcome = $(mls::Session* session)->ProcessProposals(proposals, user_ids);
 
-                            char** out_p_p = $(char** out_p_p);
+
+                            // Copy the vector to a C array on heap so the data stays valid
+                            // even after we return to Haskell. It has to be freed manually
+                            // afterwards!!
+                            char** out_p = $(char** p);
                             if (commit_welcome.has_value())
                             {
-                                *out_p_p = (char *)commit_welcome.value().data();
+                                *out_p = static_cast<char *>(malloc(commit_welcome.value().size()));
+                                memcpy(*out_p, commit_welcome.value().data(), commit_welcome.value().size());
                                 return commit_welcome.value().size();
                             }
 
-                            *out_p_p = nullptr;
+                            *out_p = nullptr;
                             return 0;
                         }
                     |]
-                    out_p <- peek out_p_p
+                    -- Check if the output is a nullptr or a pointer to the
+                    -- C++ heap containing the bytestring
+                    out_p <- peek p
                     if out_p == nullPtr then
                         pure Nothing
-                    else
-                        Just <$> BS.packCStringLen (out_p, fromIntegral n)
+                    else do
+                        bs <- BS.packCStringLen (out_p, fromIntegral n)
+                        -- Free!
+                        [C.block| void { free(*$(char** p)); } |]
+                        pure $ Just bs
+
 
 -- ProcessCommit
 -- ProcessWelcome
