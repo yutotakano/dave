@@ -12,13 +12,14 @@ import Data.Word ( Word16, Word64 )
 import Foreign.Marshal.Array ( withArrayLen )
 import Foreign.Marshal.Utils ( withMany )
 import Foreign.Ptr ( Ptr, nullPtr )
+import Foreign.ForeignPtr ( newForeignPtr )
 import Foreign.Storable ( peekElemOff )
 import Language.C.Inline qualified as C
 import Language.C.Inline.Cpp qualified as Cpp
 
 import Dave.Types
 
-C.context (Cpp.cppCtx <> C.bsCtx <> daveContext)
+C.context (Cpp.cppCtx <> C.fptrCtx <> C.bsCtx <> daveContext)
 
 C.include "dave/mls/session.h"
 
@@ -27,13 +28,17 @@ Cpp.using "namespace discord::dave"
 -- | Create a new @MLSSession@ and return an opaque reference to it.
 new :: MonadIO m => m MLSSession
 new = liftIO $ do
-    [C.block|
+    ses <- [C.block|
         mls::Session* {
             return new mls::Session(nullptr, "", [](std::string const &s1, std::string const &s2) {
                 // TODO: we do nothing
             });
         }
     |]
+    -- Register a finalizer so the C++ destructor runs when Haskell garbage-
+    -- collects the MLSSession value.
+    let delete = [C.funPtr| void deleteSession(mls::Session* session) { delete session; } |]
+    newForeignPtr delete ses
 
 -- |
 -- TODO: untested - come back when SignaturePrivateKey can be created
@@ -50,7 +55,7 @@ init session (DaveProtocolVersion protocolVersion) groupId selfUserId transientK
             // std::shared_ptr (see upcoming documentation on the creation of
             // SignaturePrivateKey from within Haskell), we cast it and
             // dereference it before passing it to the function.
-            $(mls::Session* session)->Init($(uint16_t protocolVersion), $(uint64_t groupId), uid, *(std::shared_ptr<::mlspp::SignaturePrivateKey> *)$(void* transientKey));
+            $fptr-ptr:(mls::Session* session)->Init($(uint16_t protocolVersion), $(uint64_t groupId), uid, *(std::shared_ptr<::mlspp::SignaturePrivateKey> *)$(void* transientKey));
         }
     |]
 
@@ -61,7 +66,7 @@ reset :: MonadIO m => MLSSession -> m ()
 reset session = liftIO $ do
     [C.block|
         void {
-            $(mls::Session* session)->Reset();
+            $fptr-ptr:(mls::Session* session)->Reset();
         }
     |]
 
@@ -71,7 +76,7 @@ setProtocolVersion :: MonadIO m => MLSSession -> DaveProtocolVersion -> m ()
 setProtocolVersion session (DaveProtocolVersion protocolVersion) = liftIO $ do
     [C.block|
         void {
-            $(mls::Session* session)->SetProtocolVersion($(uint16_t protocolVersion));
+            $fptr-ptr:(mls::Session* session)->SetProtocolVersion($(uint16_t protocolVersion));
         }
     |]
 
@@ -82,7 +87,7 @@ getLastEpochAuthenticator session = liftIO $ do
     (ptr, n) <- C.withPtr $ \p ->
         [C.block|
             uint16_t {
-                std::vector<uint8_t> key = $(mls::Session* session)->GetLastEpochAuthenticator();
+                std::vector<uint8_t> key = $fptr-ptr:(mls::Session* session)->GetLastEpochAuthenticator();
 
                 // Copy the vector to a C array on heap so the data stays valid
                 // even after we return to Haskell. It has to be freed manually
@@ -109,7 +114,7 @@ setExternalSender session marshalledExternalSender = liftIO $ do
                 // pointer, then copy it into a temporary vector
                 uint8_t* ptr = (uint8_t*)$(char* p);
                 const std::vector<uint8_t> vec(ptr, ptr + $(size_t n_size_t));
-                $(mls::Session* session)->SetExternalSender(vec);
+                $fptr-ptr:(mls::Session* session)->SetExternalSender(vec);
             }
         |]
 
@@ -148,7 +153,7 @@ processProposals session proposals recognizedUserIDs = liftIO $ do
 
                             // Call ProcessProposals, which returns the combined
                             // commit and welcome message bytestream
-                            std::optional<std::vector<uint8_t>> commit_welcome = $(mls::Session* session)->ProcessProposals(proposals, user_ids);
+                            std::optional<std::vector<uint8_t>> commit_welcome = $fptr-ptr:(mls::Session* session)->ProcessProposals(proposals, user_ids);
 
 
                             // Copy the vector to a C array on heap so the data stays valid
@@ -199,7 +204,7 @@ processCommit session commitMessage = liftIO $ do
                     uint8_t* ptr = (uint8_t*)$(char* commit_p);
                     const std::vector<uint8_t> commit(ptr, ptr + $(size_t commit_n_size_t));
 
-                    RosterVariant v = $(mls::Session* session)->ProcessCommit(commit);
+                    RosterVariant v = $fptr-ptr:(mls::Session* session)->ProcessCommit(commit);
 
                     // RosterVariant is a std::variant of RosterMap, failed_t
                     // or ignored_t
@@ -303,7 +308,7 @@ processWelcome session welcomeMessage recognizedUserIDs = liftIO $ do
                                 user_ids.insert(std::string(cstrs[i]));
                             }
 
-                            std::optional<RosterMap> v = $(mls::Session* session)->ProcessWelcome(welcome, user_ids);
+                            std::optional<RosterMap> v = $fptr-ptr:(mls::Session* session)->ProcessWelcome(welcome, user_ids);
 
                             uint64_t** keys_p = $(uint64_t** out_key_p);
                             if (!v.has_value())
@@ -371,7 +376,7 @@ getMarshalledKeyPackage session = liftIO $ do
     (ptr, n) <- C.withPtr $ \p ->
         [C.block|
             uint16_t {
-                std::vector<uint8_t> key = $(mls::Session* session)->GetMarshalledKeyPackage();
+                std::vector<uint8_t> key = $fptr-ptr:(mls::Session* session)->GetMarshalledKeyPackage();
 
                 // Copy the vector to a C array on heap so the data stays valid
                 // even after we return to Haskell. It has to be freed manually
@@ -395,7 +400,7 @@ getKeyRatchet session userId = liftIO $ do
             IKeyRatchet* {
                 char* cstr = $(char* cstr);
                 std::string userId(cstr);
-                auto ratchet = $(mls::Session* session)->GetKeyRatchet(userId);
+                auto ratchet = $fptr-ptr:(mls::Session* session)->GetKeyRatchet(userId);
                 if (ratchet == nullptr) return nullptr;
 
                 // Release unique_ptr to raw pointer: must be freed explicitly!
@@ -433,6 +438,6 @@ getPairwiseFingerprint session version userId callback = withRunInIO $ \unliftIO
                 });
 
                 std::string userId($(char* cstr));
-                $(mls::Session* session)->GetPairwiseFingerprint($(uint16_t version), userId, cppCallback);
+                $fptr-ptr:(mls::Session* session)->GetPairwiseFingerprint($(uint16_t version), userId, cppCallback);
             }
         |]

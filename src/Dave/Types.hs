@@ -5,6 +5,7 @@
 {-# LANGUAGE DerivingVia #-}
 module Dave.Types where
 
+import Foreign.ForeignPtr ( ForeignPtr )
 import Foreign.Ptr ( Ptr )
 import Data.ByteString qualified as BS
 import Data.Map.Strict qualified as Map
@@ -19,7 +20,7 @@ data RawDaveMLSSession
 -- | Type alias for a pointer to 'RawDaveMLSSession' to simplify API. Construct
 -- this using 'Dave.Raw.MLS.Session.new', then call 'Dave.Raw.MLS.Session.init'
 -- on it to initialise it.
-type MLSSession = Ptr RawDaveMLSSession
+type MLSSession = ForeignPtr RawDaveMLSSession
 
 -- | A type representing the protocol version for DAVE.
 --
