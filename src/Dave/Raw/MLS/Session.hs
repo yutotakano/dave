@@ -182,7 +182,7 @@ processProposals session proposals recognizedUserIDs = liftIO $ do
 -- TODO: untested
 processCommit :: MonadIO m => MLSSession -> BS.ByteString -> m RosterVariant
 processCommit session commitMessage = liftIO $ do
-    -- Pass four out pointers:
+    -- Pass five out pointers:
     -- typ: 0 for RosterMap, 1 for failed_t, 2 for ignored_t
     -- key_p: Array of uint64_t keys for RosterMap
     -- val_p: Array of byte string values for RosterMap
@@ -268,7 +268,99 @@ processCommit session commitMessage = liftIO $ do
             |]
             pure $ RosterMap $ Map.fromList pairs
 
--- ProcessWelcome
+processWelcome :: MonadIO m => MLSSession -> BS.ByteString -> [BS.ByteString] -> m (Maybe RosterMap)
+processWelcome session welcomeMessage recognizedUserIDs = liftIO $ do
+    -- Pass four out pointers:
+    -- key_p: Array of uint64_t keys for RosterMap - nullPtr indicates failure
+    -- val_p: Array of byte string values for RosterMap
+    -- val_len_p: Array of lengths of byte strings in val_p
+    -- n: Number of items in the key_p and val_p array
+    (key_p, val_p, val_len_p, n) <- C.withPtrs_ $ \(out_key_p, out_value_p, out_value_len_p, out_n) ->
+        -- Get welcome message bytestring as a c string with length
+        BS.useAsCStringLen welcomeMessage $ \(welcome_ptr, welcome_n) -> do
+            -- Wrap length (Int) with fromIntegral so we can pass it as size_t
+            let welcome_n_size_t = fromIntegral welcome_n
+            -- Nest useAsCString for all user ID bytestrings
+            withMany BS.useAsCString recognizedUserIDs $ \cstrs -> do
+                -- Create a pointer for the list of user ID c strings
+                withArrayLen cstrs $ \str_n str_ptr -> do
+                    -- Wrap length (Int) with fromIntegral so it is size_t
+                    let str_n_32 = fromIntegral str_n
+                    [C.block|
+                        void {
+                            // Convert bytestring passed as C pointer + length
+                            // into a std::vector<uint8_t>
+                            uint8_t* ptr = (uint8_t*)$(char* welcome_ptr);
+                            const std::vector<uint8_t> welcome(ptr, ptr + $(size_t welcome_n_size_t));
+
+                            // Convert array of strings (null-terminated C strs)
+                            // and the array length into a std::set<std::string>
+                            std::set<std::string> user_ids;
+                            char** cstrs = $(char** str_ptr);
+                            for (size_t i = 0; i < $(int32_t str_n_32); i++)
+                            {
+                                user_ids.insert(std::string(cstrs[i]));
+                            }
+
+                            std::optional<RosterMap> v = $(mls::Session* session)->ProcessWelcome(welcome, user_ids);
+
+                            uint64_t** keys_p = $(uint64_t** out_key_p);
+                            if (!v.has_value())
+                            {
+                                *keys_p = nullptr;
+                                return;
+                            }
+
+                            RosterMap m = v.value();
+
+                            // Set output size
+                            *$(uint8_t* out_n) = m.size();
+
+                            // Create C-style arrays on the heap for keys and values.
+                            // (values are pointers to bytes)
+                            // These need to be freed explicitly afterwards!
+                            *keys_p = (uint64_t*)malloc(sizeof(uint64_t) * m.size());
+                            char*** values_p = $(char*** out_value_p);
+                            *values_p = (char**)malloc(sizeof(char*) * m.size());
+                            uint8_t** value_lens_p = $(uint8_t** out_value_len_p);
+                            *value_lens_p = (uint8_t*)malloc(sizeof(uint8_t*) * m.size());
+
+                            // Insert into above array from the kv map
+                            int i = 0;
+                            for (const auto &[key, value] : m)
+                            {
+                                (*keys_p)[i] = key;
+                                (*value_lens_p)[i] = value.size();
+                                (*values_p)[i] = (char*)malloc(value.size());
+                                memcpy((*values_p)[i], value.data(), value.size());
+                            }
+                        }
+                    |]
+    if key_p == nullPtr then
+        pure Nothing
+    else do
+        -- Create a list of (key,value) pairs
+        pairs <- forM [0..(fromIntegral n - 1)] $ \i -> do
+            key <- peekElemOff key_p i
+            val <- peekElemOff val_p i
+            val_len <- peekElemOff val_len_p i
+            bs <- BS.packCStringLen (val, fromIntegral val_len)
+            pure (key, bs)
+
+        -- Make sure we free all dynamically allocated arrays
+        [C.block|
+            void {
+                free($(uint64_t* key_p));
+                char** val_p = $(char** val_p);
+                for (int i = 0; i < $(uint8_t n); i++)
+                {
+                    free(val_p[i]);
+                }
+                free(val_p);
+                free($(uint8_t* val_len_p));
+            }
+        |]
+        pure $ Just $ Map.fromList pairs
 
 -- | Get the generated key package as a marshalled strict bytestring.
 -- This must be called after 'init'.

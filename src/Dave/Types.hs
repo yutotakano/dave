@@ -50,10 +50,11 @@ newtype DaveSignatureVersion = DaveSignatureVersion Word8
 -- using in inline C++.
 type SignaturePrivateKey = Ptr ()
 
+type RosterMap = Map.Map Word64 BS.ByteString
 
 -- | A type representing either a roster map or soft/hard failures.
 data RosterVariant
-    = RosterMap (Map.Map Word64 BS.ByteString)
+    = RosterMap RosterMap
     | SoftReject
     | HardReject
 
