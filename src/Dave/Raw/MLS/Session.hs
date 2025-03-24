@@ -117,18 +117,18 @@ setExternalSender session marshalledExternalSender = liftIO $ do
 -- TODO: untested
 processProposals :: MonadIO m => MLSSession -> BS.ByteString -> [BS.ByteString] -> m (Maybe BS.ByteString)
 processProposals session proposals recognizedUserIDs = liftIO $ do
-    -- Get proposals bytestring as a c string with length
-    BS.useAsCStringLen proposals $ \(proposals_ptr, proposals_n) -> do
-        -- Wrap length (Int) with fromIntegral so we can pass it as size_t
-        let proposals_n_size_t = fromIntegral proposals_n
-        -- Nest useAsCString for all user ID bytestrings
-        withMany BS.useAsCString recognizedUserIDs $ \cstrs -> do
-            -- Create a pointer for the list of user ID c strings
-            withArrayLen cstrs $ \str_n str_ptr -> do
-                -- Wrap length (Int) with fromIntegral so it is size_t
-                let str_n_32 = fromIntegral str_n
-                -- Allocate an out pointer
-                (ptr, n) <- C.withPtr $ \p ->
+    -- Allocate an out pointer
+    (ptr, n) <- C.withPtr $ \p ->
+        -- Get proposals bytestring as a c string with length
+        BS.useAsCStringLen proposals $ \(proposals_ptr, proposals_n) -> do
+            -- Wrap length (Int) with fromIntegral so we can pass it as size_t
+            let proposals_n_size_t = fromIntegral proposals_n
+            -- Nest useAsCString for all user ID bytestrings
+            withMany BS.useAsCString recognizedUserIDs $ \cstrs -> do
+                -- Create a pointer for the list of user ID c strings
+                withArrayLen cstrs $ \str_n str_ptr -> do
+                    -- Wrap length (Int) with fromIntegral so it is size_t
+                    let str_n_32 = fromIntegral str_n
                     [C.block|
                         uint16_t {
                             // Convert bytestring passed as C pointer + length
@@ -165,15 +165,15 @@ processProposals session proposals recognizedUserIDs = liftIO $ do
                             return 0;
                         }
                     |]
-                -- Check if the output is a nullptr or a pointer to the
-                -- C++ heap containing the bytestring
-                if ptr == nullPtr then
-                    pure Nothing
-                else do
-                    bs <- BS.packCStringLen (ptr, fromIntegral n)
-                    -- Free!
-                    [C.block| void { free($(char* ptr)); } |]
-                    pure $ Just bs
+    -- Check if the output is a nullptr or a pointer to the
+    -- C++ heap containing the bytestring
+    if ptr == nullPtr then
+        pure Nothing
+    else do
+        bs <- BS.packCStringLen (ptr, fromIntegral n)
+        -- Free!
+        [C.block| void { free($(char* ptr)); } |]
+        pure $ Just bs
 
 -- | Process a commit message and return either a hard reject (caller should
 -- reset state), soft reject (caller should ignore the error) or a roster map
