@@ -106,17 +106,15 @@ getLastEpochAuthenticator session = liftIO $ do
 -- TODO: untested
 setExternalSender :: MonadIO m => MLSSession -> BS.ByteString -> m ()
 setExternalSender session marshalledExternalSender = liftIO $ do
-    BS.useAsCStringLen marshalledExternalSender $ \(p, n) -> do
-        let n_size_t = fromIntegral n
-        [C.block|
-            void {
-                // SetExternalVector wants a vector<uint8_t>, so first cast the
-                // pointer, then copy it into a temporary vector
-                uint8_t* ptr = (uint8_t*)$(char* p);
-                const std::vector<uint8_t> vec(ptr, ptr + $(size_t n_size_t));
-                $fptr-ptr:(mls::Session* session)->SetExternalSender(vec);
-            }
-        |]
+    [C.block|
+        void {
+            // SetExternalVector wants a vector<uint8_t>, so first cast the
+            // pointer, then copy it into a temporary vector
+            uint8_t* ptr = (uint8_t*)$bs-ptr:marshalledExternalSender;
+            const std::vector<uint8_t> vec(ptr, ptr + $bs-len:marshalledExternalSender);
+            $fptr-ptr:(mls::Session* session)->SetExternalSender(vec);
+        }
+    |]
 
 -- | Process proposals with a list of recognized user IDs. Returns the commit
 -- and welcome messages in one buffer.
@@ -125,52 +123,48 @@ processProposals :: MonadIO m => MLSSession -> BS.ByteString -> [BS.ByteString] 
 processProposals session proposals recognizedUserIDs = liftIO $ do
     -- Allocate an out pointer
     (ptr, n) <- C.withPtr $ \p ->
-        -- Get proposals bytestring as a c string with length
-        BS.useAsCStringLen proposals $ \(proposals_ptr, proposals_n) -> do
-            -- Wrap length (Int) with fromIntegral so we can pass it as size_t
-            let proposals_n_size_t = fromIntegral proposals_n
-            -- Nest useAsCString for all user ID bytestrings
-            withMany BS.useAsCString recognizedUserIDs $ \cstrs -> do
-                -- Create a pointer for the list of user ID c strings
-                withArrayLen cstrs $ \str_n str_ptr -> do
-                    -- Wrap length (Int) with fromIntegral so it is size_t
-                    let str_n_32 = fromIntegral str_n
-                    [C.block|
-                        uint16_t {
-                            // Convert bytestring passed as C pointer + length
-                            // into a std::vector<uint8_t>
-                            uint8_t* ptr = (uint8_t*)$(char* proposals_ptr);
-                            const std::vector<uint8_t> proposals(ptr, ptr + $(size_t proposals_n_size_t));
+        -- Nest useAsCString for all user ID bytestrings
+        withMany BS.useAsCString recognizedUserIDs $ \cstrs -> do
+            -- Create a pointer for the list of user ID c strings
+            withArrayLen cstrs $ \str_n str_ptr -> do
+                -- Wrap length (Int) with fromIntegral so it is size_t
+                let str_n_32 = fromIntegral str_n
+                [C.block|
+                    uint16_t {
+                        // Convert bytestring passed as C pointer + length
+                        // into a std::vector<uint8_t>
+                        uint8_t* ptr = (uint8_t*)$bs-ptr:proposals;
+                        const std::vector<uint8_t> proposals(ptr, ptr + $bs-len:proposals);
 
-                            // Convert array of strings (null-terminated C strs)
-                            // and the array length into a std::set<std::string>
-                            std::set<std::string> user_ids;
-                            char** cstrs = $(char** str_ptr);
-                            for (size_t i = 0; i < $(int32_t str_n_32); i++)
-                            {
-                                user_ids.insert(std::string(cstrs[i]));
-                            }
-
-                            // Call ProcessProposals, which returns the combined
-                            // commit and welcome message bytestream
-                            std::optional<std::vector<uint8_t>> commit_welcome = $fptr-ptr:(mls::Session* session)->ProcessProposals(proposals, user_ids);
-
-
-                            // Copy the vector to a C array on heap so the data stays valid
-                            // even after we return to Haskell. It has to be freed manually
-                            // afterwards!!
-                            char** out_p = $(char** p);
-                            if (commit_welcome.has_value())
-                            {
-                                *out_p = static_cast<char *>(malloc(commit_welcome.value().size()));
-                                memcpy(*out_p, commit_welcome.value().data(), commit_welcome.value().size());
-                                return commit_welcome.value().size();
-                            }
-
-                            *out_p = nullptr;
-                            return 0;
+                        // Convert array of strings (null-terminated C strs)
+                        // and the array length into a std::set<std::string>
+                        std::set<std::string> user_ids;
+                        char** cstrs = $(char** str_ptr);
+                        for (size_t i = 0; i < $(int32_t str_n_32); i++)
+                        {
+                            user_ids.insert(std::string(cstrs[i]));
                         }
-                    |]
+
+                        // Call ProcessProposals, which returns the combined
+                        // commit and welcome message bytestream
+                        std::optional<std::vector<uint8_t>> commit_welcome = $fptr-ptr:(mls::Session* session)->ProcessProposals(proposals, user_ids);
+
+
+                        // Copy the vector to a C array on heap so the data stays valid
+                        // even after we return to Haskell. It has to be freed manually
+                        // afterwards!!
+                        char** out_p = $(char** p);
+                        if (commit_welcome.has_value())
+                        {
+                            *out_p = static_cast<char *>(malloc(commit_welcome.value().size()));
+                            memcpy(*out_p, commit_welcome.value().data(), commit_welcome.value().size());
+                            return commit_welcome.value().size();
+                        }
+
+                        *out_p = nullptr;
+                        return 0;
+                    }
+                |]
     -- Check if the output is a nullptr or a pointer to the
     -- C++ heap containing the bytestring
     if ptr == nullPtr then
@@ -195,58 +189,56 @@ processCommit session commitMessage = liftIO $ do
     -- val_len_p: Array of lengths of byte strings in val_p
     -- n: Number of items in the key_p and val_p array
     (typ, key_p, val_p, val_len_p, n) <- C.withPtrs_ $ \(out_typ_p, out_key_p, out_value_p, out_value_len_p, out_n) ->
-        BS.useAsCStringLen commitMessage $ \(commit_p, commit_n) -> do
-            let commit_n_size_t = fromIntegral commit_n
-            [C.block|
-                void {
-                    // Convert bytestring passed as C pointer + length
-                    // into a std::vector<uint8_t>
-                    uint8_t* ptr = (uint8_t*)$(char* commit_p);
-                    const std::vector<uint8_t> commit(ptr, ptr + $(size_t commit_n_size_t));
+        [C.block|
+            void {
+                // Convert bytestring passed as C pointer + length
+                // into a std::vector<uint8_t>
+                uint8_t* ptr = (uint8_t*)$bs-ptr:commitMessage;
+                const std::vector<uint8_t> commit(ptr, ptr + $bs-len:commitMessage);
 
-                    RosterVariant v = $fptr-ptr:(mls::Session* session)->ProcessCommit(commit);
+                RosterVariant v = $fptr-ptr:(mls::Session* session)->ProcessCommit(commit);
 
-                    // RosterVariant is a std::variant of RosterMap, failed_t
-                    // or ignored_t
-                    uint8_t* out_typ_p = $(uint8_t* out_typ_p);
-                    if (std::holds_alternative<failed_t>(v))
-                    {
-                        *out_typ_p = 1;
-                        return;
-                    }
-                    else if (std::holds_alternative<ignored_t>(v))
-                    {
-                        *out_typ_p = 2;
-                        return;
-                    }
-
-                    *out_typ_p = 0;
-                    RosterMap m = std::get<RosterMap>(v);
-
-                    // Set output size
-                    *$(uint8_t* out_n) = m.size();
-
-                    // Create C-style arrays on the heap for keys and values.
-                    // (values are pointers to bytes)
-                    // These need to be freed explicitly afterwards!
-                    uint64_t** keys_p = $(uint64_t** out_key_p);
-                    *keys_p = (uint64_t*)malloc(sizeof(uint64_t) * m.size());
-                    char*** values_p = $(char*** out_value_p);
-                    *values_p = (char**)malloc(sizeof(char*) * m.size());
-                    uint8_t** value_lens_p = $(uint8_t** out_value_len_p);
-                    *value_lens_p = (uint8_t*)malloc(sizeof(uint8_t*) * m.size());
-
-                    // Insert into above array from the kv map
-                    int i = 0;
-                    for (const auto &[key, value] : m)
-                    {
-                        (*keys_p)[i] = key;
-                        (*value_lens_p)[i] = value.size();
-                        (*values_p)[i] = (char*)malloc(value.size());
-                        memcpy((*values_p)[i], value.data(), value.size());
-                    }
+                // RosterVariant is a std::variant of RosterMap, failed_t
+                // or ignored_t
+                uint8_t* out_typ_p = $(uint8_t* out_typ_p);
+                if (std::holds_alternative<failed_t>(v))
+                {
+                    *out_typ_p = 1;
+                    return;
                 }
-            |]
+                else if (std::holds_alternative<ignored_t>(v))
+                {
+                    *out_typ_p = 2;
+                    return;
+                }
+
+                *out_typ_p = 0;
+                RosterMap m = std::get<RosterMap>(v);
+
+                // Set output size
+                *$(uint8_t* out_n) = m.size();
+
+                // Create C-style arrays on the heap for keys and values.
+                // (values are pointers to bytes)
+                // These need to be freed explicitly afterwards!
+                uint64_t** keys_p = $(uint64_t** out_key_p);
+                *keys_p = (uint64_t*)malloc(sizeof(uint64_t) * m.size());
+                char*** values_p = $(char*** out_value_p);
+                *values_p = (char**)malloc(sizeof(char*) * m.size());
+                uint8_t** value_lens_p = $(uint8_t** out_value_len_p);
+                *value_lens_p = (uint8_t*)malloc(sizeof(uint8_t*) * m.size());
+
+                // Insert into above array from the kv map
+                int i = 0;
+                for (const auto &[key, value] : m)
+                {
+                    (*keys_p)[i] = key;
+                    (*value_lens_p)[i] = value.size();
+                    (*values_p)[i] = (char*)malloc(value.size());
+                    memcpy((*values_p)[i], value.data(), value.size());
+                }
+            }
+        |]
     case typ of
         1 -> pure HardReject
         2 -> pure SoftReject
@@ -282,66 +274,62 @@ processWelcome session welcomeMessage recognizedUserIDs = liftIO $ do
     -- val_len_p: Array of lengths of byte strings in val_p
     -- n: Number of items in the key_p and val_p array
     (key_p, val_p, val_len_p, n) <- C.withPtrs_ $ \(out_key_p, out_value_p, out_value_len_p, out_n) ->
-        -- Get welcome message bytestring as a c string with length
-        BS.useAsCStringLen welcomeMessage $ \(welcome_ptr, welcome_n) -> do
-            -- Wrap length (Int) with fromIntegral so we can pass it as size_t
-            let welcome_n_size_t = fromIntegral welcome_n
-            -- Nest useAsCString for all user ID bytestrings
-            withMany BS.useAsCString recognizedUserIDs $ \cstrs -> do
-                -- Create a pointer for the list of user ID c strings
-                withArrayLen cstrs $ \str_n str_ptr -> do
-                    -- Wrap length (Int) with fromIntegral so it is size_t
-                    let str_n_32 = fromIntegral str_n
-                    [C.block|
-                        void {
-                            // Convert bytestring passed as C pointer + length
-                            // into a std::vector<uint8_t>
-                            uint8_t* ptr = (uint8_t*)$(char* welcome_ptr);
-                            const std::vector<uint8_t> welcome(ptr, ptr + $(size_t welcome_n_size_t));
+        -- Nest useAsCString for all user ID bytestrings
+        withMany BS.useAsCString recognizedUserIDs $ \cstrs -> do
+            -- Create a pointer for the list of user ID c strings
+            withArrayLen cstrs $ \str_n str_ptr -> do
+                -- Wrap length (Int) with fromIntegral so it is size_t
+                let str_n_32 = fromIntegral str_n
+                [C.block|
+                    void {
+                        // Convert bytestring passed as C pointer + length
+                        // into a std::vector<uint8_t>
+                        uint8_t* ptr = (uint8_t*)$bs-ptr:welcomeMessage;
+                        const std::vector<uint8_t> welcome(ptr, ptr + $bs-len:welcomeMessage);
 
-                            // Convert array of strings (null-terminated C strs)
-                            // and the array length into a std::set<std::string>
-                            std::set<std::string> user_ids;
-                            char** cstrs = $(char** str_ptr);
-                            for (size_t i = 0; i < $(int32_t str_n_32); i++)
-                            {
-                                user_ids.insert(std::string(cstrs[i]));
-                            }
-
-                            std::optional<RosterMap> v = $fptr-ptr:(mls::Session* session)->ProcessWelcome(welcome, user_ids);
-
-                            uint64_t** keys_p = $(uint64_t** out_key_p);
-                            if (!v.has_value())
-                            {
-                                *keys_p = nullptr;
-                                return;
-                            }
-
-                            RosterMap m = v.value();
-
-                            // Set output size
-                            *$(uint8_t* out_n) = m.size();
-
-                            // Create C-style arrays on the heap for keys and values.
-                            // (values are pointers to bytes)
-                            // These need to be freed explicitly afterwards!
-                            *keys_p = (uint64_t*)malloc(sizeof(uint64_t) * m.size());
-                            char*** values_p = $(char*** out_value_p);
-                            *values_p = (char**)malloc(sizeof(char*) * m.size());
-                            uint8_t** value_lens_p = $(uint8_t** out_value_len_p);
-                            *value_lens_p = (uint8_t*)malloc(sizeof(uint8_t*) * m.size());
-
-                            // Insert into above array from the kv map
-                            int i = 0;
-                            for (const auto &[key, value] : m)
-                            {
-                                (*keys_p)[i] = key;
-                                (*value_lens_p)[i] = value.size();
-                                (*values_p)[i] = (char*)malloc(value.size());
-                                memcpy((*values_p)[i], value.data(), value.size());
-                            }
+                        // Convert array of strings (null-terminated C strs)
+                        // and the array length into a std::set<std::string>
+                        std::set<std::string> user_ids;
+                        char** cstrs = $(char** str_ptr);
+                        for (size_t i = 0; i < $(int32_t str_n_32); i++)
+                        {
+                            user_ids.insert(std::string(cstrs[i]));
                         }
-                    |]
+
+                        std::optional<RosterMap> v = $fptr-ptr:(mls::Session* session)->ProcessWelcome(welcome, user_ids);
+
+                        uint64_t** keys_p = $(uint64_t** out_key_p);
+                        if (!v.has_value())
+                        {
+                            *keys_p = nullptr;
+                            return;
+                        }
+
+                        RosterMap m = v.value();
+
+                        // Set output size
+                        *$(uint8_t* out_n) = m.size();
+
+                        // Create C-style arrays on the heap for keys and values.
+                        // (values are pointers to bytes)
+                        // These need to be freed explicitly afterwards!
+                        *keys_p = (uint64_t*)malloc(sizeof(uint64_t) * m.size());
+                        char*** values_p = $(char*** out_value_p);
+                        *values_p = (char**)malloc(sizeof(char*) * m.size());
+                        uint8_t** value_lens_p = $(uint8_t** out_value_len_p);
+                        *value_lens_p = (uint8_t*)malloc(sizeof(uint8_t*) * m.size());
+
+                        // Insert into above array from the kv map
+                        int i = 0;
+                        for (const auto &[key, value] : m)
+                        {
+                            (*keys_p)[i] = key;
+                            (*value_lens_p)[i] = value.size();
+                            (*values_p)[i] = (char*)malloc(value.size());
+                            memcpy((*values_p)[i], value.data(), value.size());
+                        }
+                    }
+                |]
     if key_p == nullPtr then
         pure Nothing
     else do
@@ -395,18 +383,16 @@ getMarshalledKeyPackage session = liftIO $ do
 -- TODO: untested
 getKeyRatchet :: MonadIO m => MLSSession -> BS.ByteString -> m (Maybe KeyRatchet)
 getKeyRatchet session userId = liftIO $ do
-    res <- BS.useAsCString userId $ \cstr ->
-        [C.block|
-            IKeyRatchet* {
-                char* cstr = $(char* cstr);
-                std::string userId(cstr);
-                auto ratchet = $fptr-ptr:(mls::Session* session)->GetKeyRatchet(userId);
-                if (ratchet == nullptr) return nullptr;
+    res <- [C.block|
+        IKeyRatchet* {
+            std::string userId($bs-cstr:userId);
+            auto ratchet = $fptr-ptr:(mls::Session* session)->GetKeyRatchet(userId);
+            if (ratchet == nullptr) return nullptr;
 
-                // Release unique_ptr to raw pointer: must be freed explicitly!
-                return ratchet.release();
-            }
-        |]
+            // Release unique_ptr to raw pointer: must be freed explicitly!
+            return ratchet.release();
+        }
+    |]
     if res == nullPtr then
         pure Nothing
     else
@@ -424,20 +410,19 @@ getPairwiseFingerprint session version userId callback = withRunInIO $ \unliftIO
             unliftIO $ callback bs
     callbackPtr <- $(C.mkFunPtr [t| Ptr C.CChar -> C.CSize -> IO () |]) callbackCleanup
 
-    BS.useAsCString userId $ \cstr -> do
-        [C.block|
-            void {
-                // Wrap Haskell callback with a C++ function for some conversion
-                // from vectors to C-style array + length.
-                std::function<void(std::vector<uint8_t> const&)> cppCallback([&](std::vector<uint8_t> vec)
-                {
-                    // Needs explicit free afterwards!
-                    char* out_p = static_cast<char *>(malloc(vec.size()));
-                    memcpy(out_p, vec.data(), vec.size());
-                    $(void (*callbackPtr)(char *, size_t))(out_p, vec.size());
-                });
+    [C.block|
+        void {
+            // Wrap Haskell callback with a C++ function for some conversion
+            // from vectors to C-style array + length.
+            std::function<void(std::vector<uint8_t> const&)> cppCallback([&](std::vector<uint8_t> vec)
+            {
+                // Needs explicit free afterwards!
+                char* out_p = static_cast<char *>(malloc(vec.size()));
+                memcpy(out_p, vec.data(), vec.size());
+                $(void (*callbackPtr)(char *, size_t))(out_p, vec.size());
+            });
 
-                std::string userId($(char* cstr));
-                $fptr-ptr:(mls::Session* session)->GetPairwiseFingerprint($(uint16_t version), userId, cppCallback);
-            }
-        |]
+            std::string userId($bs-cstr:userId);
+            $fptr-ptr:(mls::Session* session)->GetPairwiseFingerprint($(uint16_t version), userId, cppCallback);
+        }
+    |]
