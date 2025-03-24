@@ -5,12 +5,13 @@ module Dave.Raw.MLS.Session where
 
 import Control.Monad ( forM )
 import Control.Monad.IO.Class ( MonadIO, liftIO )
+import Control.Monad.IO.Unlift ( MonadUnliftIO( withRunInIO ) )
 import Data.ByteString qualified as BS
 import Data.Map.Strict qualified as Map
-import Data.Word ( Word64 )
+import Data.Word ( Word16, Word64 )
 import Foreign.Marshal.Array ( withArrayLen )
 import Foreign.Marshal.Utils ( withMany )
-import Foreign.Ptr ( nullPtr )
+import Foreign.Ptr ( Ptr, nullPtr )
 import Foreign.Storable ( peekElemOff )
 import Language.C.Inline qualified as C
 import Language.C.Inline.Cpp qualified as Cpp
@@ -406,4 +407,32 @@ getKeyRatchet session userId = liftIO $ do
     else
         pure $ Just res
 
--- GetPairwiseFingerprint
+-- | Derive a pairwise fingerprint key (using scrypt from OpenSSL) using the
+-- combined hash for our own and the provided user ID. The provided callback
+-- will be run in a separate thread once the key is derived.
+getPairwiseFingerprint :: MonadUnliftIO m => MLSSession -> Word16 -> BS.ByteString -> (BS.ByteString -> m ()) -> m ()
+getPairwiseFingerprint session version userId callback = withRunInIO $ \unliftIO -> do
+    -- Create a wrapper callback function to free the C array after copy
+    let callbackCleanup ptr n = do
+            bs <- BS.packCStringLen (ptr, fromIntegral n)
+            [C.block| void { free($(char* ptr)); } |]
+            unliftIO $ callback bs
+    callbackPtr <- $(C.mkFunPtr [t| Ptr C.CChar -> C.CSize -> IO () |]) callbackCleanup
+
+    BS.useAsCString userId $ \cstr -> do
+        [C.block|
+            void {
+                // Wrap Haskell callback with a C++ function for some conversion
+                // from vectors to C-style array + length.
+                std::function<void(std::vector<uint8_t> const&)> cppCallback([&](std::vector<uint8_t> vec)
+                {
+                    // Needs explicit free afterwards!
+                    char* out_p = static_cast<char *>(malloc(vec.size()));
+                    memcpy(out_p, vec.data(), vec.size());
+                    $(void (*callbackPtr)(char *, size_t))(out_p, vec.size());
+                });
+
+                std::string userId($(char* cstr));
+                $(mls::Session* session)->GetPairwiseFingerprint($(uint16_t version), userId, cppCallback);
+            }
+        |]
