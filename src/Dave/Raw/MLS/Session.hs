@@ -385,7 +385,25 @@ getMarshalledKeyPackage session = liftIO $ do
     [C.block| void { free($(char* ptr)); } |]
     pure bs
 
+-- | Get the key ratchet for a user ID.
+-- TODO: untested
+getKeyRatchet :: MonadIO m => MLSSession -> BS.ByteString -> m (Maybe KeyRatchet)
+getKeyRatchet session userId = liftIO $ do
+    res <- BS.useAsCString userId $ \cstr ->
+        [C.block|
+            IKeyRatchet* {
+                char* cstr = $(char* cstr);
+                std::string userId(cstr);
+                auto ratchet = $(mls::Session* session)->GetKeyRatchet(userId);
+                if (ratchet == nullptr) return nullptr;
 
+                // Release unique_ptr to raw pointer: must be freed explicitly!
+                return ratchet.release();
+            }
+        |]
+    if res == nullPtr then
+        pure Nothing
+    else
+        pure $ Just res
 
--- GetKeyRatchet
 -- GetPairwiseFingerprint

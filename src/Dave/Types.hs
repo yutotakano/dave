@@ -50,6 +50,7 @@ newtype DaveSignatureVersion = DaveSignatureVersion Word8
 -- using in inline C++.
 type SignaturePrivateKey = Ptr ()
 
+-- | A roster map maps user IDs to keys that were changed, added or removed.
 type RosterMap = Map.Map Word64 BS.ByteString
 
 -- | A type representing either a roster map or soft/hard failures.
@@ -58,10 +59,16 @@ data RosterVariant
     | SoftReject
     | HardReject
 
+-- | Opaque type for a C++ object of discord::dave::IKeyRatchet.
+data RawDaveKeyRatchet
+-- | Type alias for a pointer to 'RawDaveKeyRatchet' to simplify API.
+type KeyRatchet = Ptr RawDaveKeyRatchet
+
 -- | Set up matching types between C++ return types and Haskell types
 daveContext :: C.Context
 daveContext = Cpp.cppTypePairs
     [ ( "mls::Session" :: CT.CIdentifier, [t| RawDaveMLSSession |] )
     , ( "ProtocolVersion" :: CT.CIdentifier, [t| Word16 |])
     , ( "SignatureVersion" :: CT.CIdentifier, [t| Word8 |])
+    , ( "IKeyRatchet" :: CT.CIdentifier, [t| RawDaveKeyRatchet |])
     ]
